@@ -1,0 +1,51 @@
+name: Update subway data
+
+# Every hour: download MTA's supplemented GTFS (regular schedule + planned work for
+# the next 7 days), build subway.json for the app and publish it on the `data` branch.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["tools/**", ".github/workflows/**"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download GTFS
+        run: |
+          curl -fsSL --retry 3 -o gtfs.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip \
+            || curl -fsSL --retry 3 -o gtfs.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip
+
+      - name: Build subway.json
+        run: |
+          mkdir -p out
+          python tools/build_data.py --gtfs gtfs.zip --out out/subway.json
+          python -c "import json; print(json.load(open('out/subway.json'))['version'])" > out/version.txt
+          cat out/version.txt
+
+      - name: Publish to the data branch
+        run: |
+          cd out
+          git init -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add subway.json version.txt
+          git commit -qm "Data $(cat version.txt)"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" data
